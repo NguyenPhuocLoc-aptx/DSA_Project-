@@ -1,5 +1,6 @@
+// src/components/MapView.tsx
 import React, { useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { Navigation2, Utensils, Star, X, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -27,6 +28,16 @@ function MapController({ center, zoom }: { center: [number, number], zoom: numbe
     return null;
 }
 
+// Custom hook component to listen for map clicks
+function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => void }) {
+    useMapEvents({
+        click(e) {
+            onClick(e.latlng.lat, e.latlng.lng);
+        }
+    });
+    return null;
+}
+
 interface MapViewProps {
     restaurants: Restaurant[];
     selectedRestaurant: Restaurant | null;
@@ -34,6 +45,7 @@ interface MapViewProps {
     mapCenter: [number, number];
     onSelectRestaurant: (res: Restaurant | null) => void;
     onFindPath: (target: Restaurant) => void;
+    onMapClick: (lat: number, lng: number) => void;
 }
 
 export default function MapView({
@@ -42,13 +54,17 @@ export default function MapView({
     routingPath,
     mapCenter,
     onSelectRestaurant,
-    onFindPath
+    onFindPath,
+    onMapClick
 }: MapViewProps) {
     return (
         <main className="flex-1 relative z-10">
             <MapContainer center={UI_LOCATION} zoom={16} className="w-full h-full" zoomControl={false}>
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                 <MapController center={mapCenter} zoom={17} />
+
+                {/* Mount the click handler */}
+                <MapClickHandler onClick={onMapClick} />
 
                 <Marker position={UI_LOCATION} icon={L.divIcon({
                     className: 'iu-marker',

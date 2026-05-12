@@ -1,95 +1,35 @@
+// src/App.tsx
 import { useMemo, useState } from 'react';
-import { Search, UserCircle, Utensils } from 'lucide-react';
+import { UserCircle, Utensils } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import MapView from './components/MapView';
+import SearchBar from './components/SearchBar';
+import NearestPanel, { type NearestResult } from './components/NearestPanel';
+import { topKByRating } from './dsa/Heap';
+import { Graph, type GraphNode } from './dsa/Graph';
 import { UI_LOCATION, useRestaurants, type Restaurant } from './hooks/useRestaurants';
 
-interface GraphNode {
-  id: string;
-  lat: number;
-  lng: number;
-}
-
-interface Edge {
-  to: string;
-  weight: number;
-}
-
-function quickSort(arr: Restaurant[]): Restaurant[] {
-  if (arr.length <= 1) return arr;
-  const pivot = arr[Math.floor(arr.length / 2)];
-  const left = arr.filter((x) => x.rating > pivot.rating);
-  const middle = arr.filter((x) => x.rating === pivot.rating);
-  const right = arr.filter((x) => x.rating < pivot.rating);
-  return [...quickSort(left), ...middle, ...quickSort(right)];
-}
-
-function linearSearch(arr: Restaurant[], query: string): Restaurant[] {
-  const result: Restaurant[] = [];
-  const q = query.toLowerCase();
-  for (let i = 0; i < arr.length; i += 1) {
-    if (arr[i].name.toLowerCase().includes(q)) {
-      result.push(arr[i]);
-    }
-  }
-  return result;
-}
-
-function dijkstra(graph: Record<string, Edge[]>, startNode: string, endNode: string) {
-  const distances: Record<string, number> = {};
-  const previous: Record<string, string | null> = {};
-  const nodes = new Set(Object.keys(graph));
-
-  for (const node of nodes) {
-    distances[node] = Infinity;
-    previous[node] = null;
-  }
-  distances[startNode] = 0;
-
-  while (nodes.size > 0) {
-    let closestNode: string | null = null;
-    for (const node of nodes) {
-      if (closestNode === null || distances[node] < distances[closestNode]) {
-        closestNode = node;
-      }
-    }
-
-    if (closestNode === null || distances[closestNode] === Infinity || closestNode === endNode) {
-      break;
-    }
-
-    nodes.delete(closestNode);
-
-    for (const edge of graph[closestNode] || []) {
-      const alt = distances[closestNode] + edge.weight;
-      if (alt < distances[edge.to]) {
-        distances[edge.to] = alt;
-        previous[edge.to] = closestNode;
-      }
-    }
-  }
-
-  const path: string[] = [];
-  let curr: string | null = endNode;
-  while (curr !== null) {
-    path.unshift(curr);
-    curr = previous[curr];
-  }
-  return path;
-}
-
 export default function App() {
-  const { restaurants, loading } = useRestaurants();
-  const [searchQuery, setSearchQuery] = useState('');
+  const { restaurants, loading, trie, kdTree } = useRestaurants();
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
   const [routingPath, setRoutingPath] = useState<[number, number][]>([]);
   const [mapCenter, setMapCenter] = useState<[number, number]>(UI_LOCATION);
+  const [nearestSpots, setNearestSpots] = useState<NearestResult[]>([]);
 
-  const sortedRestaurants = useMemo(() => quickSort(restaurants), [restaurants]);
-  const filteredRestaurants = useMemo(() => {
-    if (!searchQuery) return sortedRestaurants;
-    return linearSearch(sortedRestaurants, searchQuery);
-  }, [sortedRestaurants, searchQuery]);
+  // PHASE 2: Heap Integration - Get Top 15 rated restaurants in O(N log K) time
+  const topRestaurants = useMemo(() => {
+    return topKByRating(restaurants, 15);
+  }, [restaurants]);
+
+  // PHASE 4: Graph Integration - Build the real city graph, adding IU as a starting node
+  const cityGraph = useMemo(() => {
+    const iuNode: GraphNode = {
+      id: 'iu',
+      lat: UI_LOCATION[0],
+      lng: UI_LOCATION[1],
+    };
+    return Graph.buildFromNodes([iuNode, ...restaurants]);
+  }, [restaurants]);
 
   const handleSelectRestaurant = (res: Restaurant | null) => {
     setSelectedRestaurant(res);
@@ -100,25 +40,30 @@ export default function App() {
   };
 
   const handleFindShortestPath = (target: Restaurant) => {
-    const junctions: Record<string, GraphNode> = {
-      iu: { id: 'iu', lat: UI_LOCATION[0], lng: UI_LOCATION[1] },
-      gate: { id: 'gate', lat: 10.876, lng: 106.8025 },
-      crossroad: { id: 'crossroad', lat: 10.874, lng: 106.8 },
-      target: { id: 'target', lat: target.lat, lng: target.lng },
-    };
+    const result = cityGraph.dijkstra('iu', target.id);
 
-    const graph: Record<string, Edge[]> = {
-      iu: [{ to: 'gate', weight: 1 }, { to: 'crossroad', weight: 2 }],
-      gate: [{ to: 'iu', weight: 1 }, { to: 'target', weight: 3 }],
-      crossroad: [{ to: 'iu', weight: 1 }, { to: 'target', weight: 2 }],
-      target: [{ to: 'gate', weight: 3 }, { to: 'crossroad', weight: 2 }],
-    };
+    const pathCoords = result.path
+      .map((id) => cityGraph.getNode(id))
+      .filter((node): node is GraphNode => Boolean(node))
+      .map((node) => [node.lat, node.lng] as [number, number]);
 
-    const pathIds = dijkstra(graph, 'iu', 'target');
-    const pathCoords = pathIds.map((id) => [junctions[id].lat, junctions[id].lng] as [number, number]);
     setRoutingPath(pathCoords);
     setSelectedRestaurant(target);
     setMapCenter([target.lat, target.lng]);
+  };
+
+  const handleMapClick = (lat: number, lng: number) => {
+    if (!kdTree) {
+      setNearestSpots([]);
+      return;
+    }
+    const results = kdTree.nearestK({ id: 'query', lat, lng }, 5, 2.0);
+    setNearestSpots(
+      results.map((item) => ({
+        restaurant: item.point as Restaurant,
+        distanceKm: item.distanceKm,
+      }))
+    );
   };
 
   return (
@@ -135,16 +80,7 @@ export default function App() {
         </div>
 
         <div className="hidden md:flex flex-1 max-w-md mx-8">
-          <div className="relative w-full">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[#727785]" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full h-11 pl-11 pr-11 rounded-2xl bg-[#f0f3ff] border border-[#c1c6d6] focus:ring-2 focus:ring-[#005bbf]/20 text-sm font-medium transition-all outline-none"
-              placeholder="Tìm kiếm bằng Linear Search..."
-            />
-          </div>
+          <SearchBar trie={trie} restaurants={restaurants} onSelect={handleSelectRestaurant} />
         </div>
 
         <div className="flex items-center gap-4">
@@ -161,18 +97,32 @@ export default function App() {
       <div className="flex-1 flex relative overflow-hidden">
         <Sidebar
           loading={loading}
-          restaurants={filteredRestaurants}
+          restaurants={topRestaurants}
           selectedRestaurant={selectedRestaurant}
           onSelectRestaurant={(res) => handleSelectRestaurant(res)}
         />
+
         <MapView
-          restaurants={filteredRestaurants}
+          restaurants={restaurants}
           selectedRestaurant={selectedRestaurant}
           routingPath={routingPath}
           mapCenter={mapCenter}
           onSelectRestaurant={handleSelectRestaurant}
           onFindPath={handleFindShortestPath}
+          onMapClick={handleMapClick}
         />
+
+        <div className="absolute top-4 left-4 w-[320px] bg-white rounded-2xl border border-[#c1c6d6] shadow-[0_20px_50px_rgba(0,0,0,0.15)] overflow-hidden z-50 hidden lg:block">
+          <div className="px-4 py-3 border-b border-[#c1c6d6] bg-[#f0f3ff]/30">
+            <h3 className="text-xs font-bold text-[#111c2d] uppercase tracking-wider">Nearest Spots</h3>
+          </div>
+          <NearestPanel
+            results={nearestSpots}
+            onNavigate={handleFindShortestPath}
+            onSelect={handleSelectRestaurant}
+            selectedId={selectedRestaurant?.id ?? null}
+          />
+        </div>
       </div>
     </div>
   );
