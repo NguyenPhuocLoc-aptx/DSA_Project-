@@ -1,10 +1,9 @@
-// src/lib/fetchOSMRoadNetwork.ts
 
 export interface OSMNode {
   id: string;
   lat: number;
   lng: number;
-  [key: string]: unknown; // ← satisfies KDPoint index signature
+  [key: string]: unknown;
 }
 
 export interface OSMEdge {
@@ -20,16 +19,21 @@ export interface OSMRoadNetwork {
 
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 
+// Buffer ensures road graph always extends beyond the restaurant search radius
+const ROAD_NETWORK_BUFFER_M = 600;
+
 export async function fetchOSMRoadNetwork(
   lat: number,
   lng: number,
   radiusM = 2500
 ): Promise<OSMRoadNetwork> {
+  const effectiveRadius = radiusM + ROAD_NETWORK_BUFFER_M;
+
   const query = `
-    [out:json][timeout:60];
+    [out:json][timeout:90];
     (
       way["highway"]["highway"!~"motorway|motorway_link|trunk"]
-         (around:${radiusM},${lat},${lng});
+         (around:${effectiveRadius},${lat},${lng});
     );
     out body;
     >;

@@ -14,9 +14,6 @@ export interface Restaurant extends KDPoint {
   lng: number;
 }
 
-export const UI_LOCATION: [number, number] = [10.8752, 106.8016];
-export const UI_LOCATION_OBJ = { lat: UI_LOCATION[0], lng: UI_LOCATION[1] };
-
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 
 async function fetchRestaurantsFromOverpass(
@@ -55,18 +52,18 @@ export interface UseRestaurantsReturn {
   osmLoading: boolean;
 }
 
-export function useRestaurants(): UseRestaurantsReturn {
+export function useRestaurants(lat: number, lng: number, radiusM = 2500): UseRestaurantsReturn {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [osmNetwork, setOsmNetwork] = useState<OSMRoadNetwork | null>(null);
   const [osmLoading, setOsmLoading] = useState(true);
 
-  // Fetch restaurants
+  // Fetch restaurants within radiusM
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchRestaurantsFromOverpass(UI_LOCATION[0], UI_LOCATION[1])
+    fetchRestaurantsFromOverpass(lat, lng, radiusM)
       .then((data) => {
         if (!cancelled) { setRestaurants(data); setLoading(false); }
       })
@@ -77,13 +74,14 @@ export function useRestaurants(): UseRestaurantsReturn {
         }
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [lat, lng, radiusM]);
 
-  // Fetch OSM road network
+  // Fetch OSM road network with a slightly larger radius to cover snapping
   useEffect(() => {
     let cancelled = false;
     setOsmLoading(true);
-    fetchOSMRoadNetwork(UI_LOCATION[0], UI_LOCATION[1])
+    const roadRadiusM = radiusM + 500;
+    fetchOSMRoadNetwork(lat, lng, roadRadiusM)
       .then((network) => {
         if (!cancelled) { setOsmNetwork(network); setOsmLoading(false); }
       })
@@ -92,7 +90,7 @@ export function useRestaurants(): UseRestaurantsReturn {
         if (!cancelled) setOsmLoading(false);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [lat, lng, radiusM]);
 
   const kdTree = useMemo(
     () => (restaurants.length > 0 ? new KDTree(restaurants) : null),
@@ -106,7 +104,6 @@ export function useRestaurants(): UseRestaurantsReturn {
     return t;
   }, [restaurants]);
 
-  // KD-Tree built over OSM road nodes — used for snapping
   const osmKDTree = useMemo(
     () => (osmNetwork ? new KDTree(osmNetwork.nodes) : null),
     [osmNetwork]

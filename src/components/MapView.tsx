@@ -1,4 +1,3 @@
-// src/components/MapView.tsx
 import React, { useEffect, useRef, useState } from 'react';
 import {
     MapContainer,
@@ -12,7 +11,7 @@ import {
 import L, { type Marker as LeafletMarker } from 'leaflet';
 import { Navigation2, Utensils, Star, X, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { UI_LOCATION, type Restaurant } from '../hooks/useRestaurants';
+import { type Restaurant } from '../hooks/useRestaurants';
 import RoutePanel from './RoutePanel';
 import { type DijkstraResult } from '../dsa/Graph';
 
@@ -95,6 +94,25 @@ interface MapViewProps {
     onStartAnimation: () => void;
     onResetRoute: () => void;
 }
+interface MapViewProps {
+    restaurants: Restaurant[];
+    selectedRestaurant: Restaurant | null;
+    routingPath: [number, number][];
+    exploredEdges: [[number, number], [number, number]][];
+    flyTarget: { center: [number, number]; zoom: number } | null;
+    onFlyComplete: () => void;
+    onSelectRestaurant: (res: Restaurant | null) => void;
+    onFindPath: (target: Restaurant) => void;
+    onMapClick: (lat: number, lng: number) => void;
+    dijkstraResult: DijkstraResult | null;
+    animatingRoute: boolean;
+    currentStepIndex: number;
+    onStartAnimation: () => void;
+    onResetRoute: () => void;
+    userLocation: [number, number]; // ← new
+    routeError: string | null;
+    onClearRouteError: () => void;
+}
 
 export default function MapView({
     restaurants,
@@ -111,6 +129,9 @@ export default function MapView({
     currentStepIndex,
     onStartAnimation,
     onResetRoute,
+    userLocation,
+    routeError,
+    onClearRouteError,
 }: MapViewProps) {
     const markerRefs = useRef<Map<string, LeafletMarker>>(new Map());
     const [animatedPath, setAnimatedPath] = useState<[number, number][]>([]);
@@ -160,7 +181,7 @@ export default function MapView({
 
     return (
         <main className="flex-1 relative z-10">
-            <MapContainer center={UI_LOCATION} zoom={16} className="w-full h-full" zoomControl={false}>
+            <MapContainer center={userLocation} zoom={16} className="w-full h-full" zoomControl={false}>
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                 <FlyToController target={flyTarget} onComplete={onFlyComplete} />
                 <AutoOpenPopup selectedId={selectedRestaurant?.id ?? null} markerRefs={markerRefs} />
@@ -168,7 +189,7 @@ export default function MapView({
 
                 {/* IU origin */}
                 <Marker
-                    position={UI_LOCATION}
+                    position={userLocation}
                     icon={L.divIcon({
                         className: 'iu-marker',
                         html: `<div style="width:40px;height:40px;background:#111;border-radius:50%;border:4px solid white;box-shadow:0 4px 14px rgba(0,0,0,0.4);display:flex;flex-direction:column;align-items:center;justify-content:center;color:white;font-size:9px;font-weight:900;gap:2px;letter-spacing:-0.5px">
@@ -179,13 +200,13 @@ export default function MapView({
                         iconAnchor: [20, 20],
                     })}
                 >
-                    <Popup>Vị trí của bạn: ĐH Quốc Tế</Popup>
+                    <Popup>Vị trí của bạn</Popup>
                 </Marker>
 
                 {/* Direct connection line (Euclidean reference) */}
                 {dijkstraResult && selectedRestaurant && (
                     <Polyline
-                        positions={[UI_LOCATION, [selectedRestaurant.lat, selectedRestaurant.lng]]}
+                        positions={[userLocation, [selectedRestaurant.lat, selectedRestaurant.lng]]}
                         color="#9f1239"
                         weight={2}
                         opacity={0.5}
@@ -272,6 +293,27 @@ export default function MapView({
                     </Marker>
                 ))}
             </MapContainer>
+
+            <AnimatePresence>
+                {routeError && (
+                    <motion.div
+                        key="route-error"
+                        initial={{ y: -12, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        exit={{ y: -12, opacity: 0 }}
+                        transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+                        className="absolute top-4 left-1/2 -translate-x-1/2 bg-[#fff7ed] border border-[#fb923c] text-[#9a3412] px-4 py-2 rounded-xl shadow-[0_10px_30px_rgba(0,0,0,0.12)] z-50 flex items-center gap-3"
+                    >
+                        <span className="text-xs font-semibold">{routeError}</span>
+                        <button
+                            onClick={onClearRouteError}
+                            className="text-[10px] font-bold uppercase tracking-wider text-[#9a3412]/70 hover:text-[#9a3412]"
+                        >
+                            Dismiss
+                        </button>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {/* ── RoutePanel — slides in when a target is chosen ── */}
             <AnimatePresence>
