@@ -1,70 +1,163 @@
 // src/App.tsx
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { UserCircle, Utensils } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import MapView from './components/MapView';
 import SearchBar from './components/SearchBar';
-import NearestPanel, { type NearestResult } from './components/NearestPanel';
+import { type NearestResult } from './components/NearestPanel';
 import { topKByRating } from './dsa/Heap';
-import { Graph, type GraphNode } from './dsa/Graph';
+import { Graph, type GraphNode, type DijkstraResult } from './dsa/Graph';
 import { UI_LOCATION, useRestaurants, type Restaurant } from './hooks/useRestaurants';
+
+export type SidebarMode = 'top-rated' | 'nearest';
 
 export default function App() {
   const { restaurants, loading, trie, kdTree } = useRestaurants();
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
   const [routingPath, setRoutingPath] = useState<[number, number][]>([]);
-  const [mapCenter, setMapCenter] = useState<[number, number]>(UI_LOCATION);
+  const [flyTarget, setFlyTarget] = useState<{ center: [number, number]; zoom: number } | null>(null);
   const [nearestSpots, setNearestSpots] = useState<NearestResult[]>([]);
+  const [sidebarMode, setSidebarMode] = useState<SidebarMode>('top-rated');
 
-  // PHASE 2: Heap Integration - Get Top 15 rated restaurants in O(N log K) time
-  const topRestaurants = useMemo(() => {
-    return topKByRating(restaurants, 15);
-  }, [restaurants]);
+  // Dijkstra animation state
+  const [dijkstraResult, setDijkstraResult] = useState<DijkstraResult | null>(null);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [exploredNodes, setExploredNodes] = useState<[number, number][]>([]);
+  const animationRef = useRef<number | null>(null);
+  const lastFrameRef = useRef(0);
 
-  // PHASE 4: Graph Integration - Build the real city graph, adding IU as a starting node
+  const topRestaurants = useMemo(() => topKByRating(restaurants, 15), [restaurants]);
+
   const cityGraph = useMemo(() => {
-    const iuNode: GraphNode = {
-      id: 'iu',
-      lat: UI_LOCATION[0],
-      lng: UI_LOCATION[1],
-    };
+    const iuNode: GraphNode = { id: 'iu', lat: UI_LOCATION[0], lng: UI_LOCATION[1] };
     return Graph.buildFromNodes([iuNode, ...restaurants]);
   }, [restaurants]);
 
-  const handleSelectRestaurant = (res: Restaurant | null) => {
-    setSelectedRestaurant(res);
-    setRoutingPath([]);
-    if (res) {
-      setMapCenter([res.lat, res.lng]);
+  const stopAnimation = useCallback(() => {
+    if (animationRef.current !== null) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
     }
-  };
+    lastFrameRef.current = 0;
+  }, []);
 
-  const handleFindShortestPath = (target: Restaurant) => {
-    const result = cityGraph.dijkstra('iu', target.id);
+  useEffect(() => () => stopAnimation(), [stopAnimation]);
 
-    const pathCoords = result.path
-      .map((id) => cityGraph.getNode(id))
-      .filter((node): node is GraphNode => Boolean(node))
-      .map((node) => [node.lat, node.lng] as [number, number]);
+  const runDijkstraAnimation = useCallback((result: DijkstraResult) => {
+    stopAnimation();
+    setIsAnimating(true);
+    setRoutingPath([]);
+    setExploredNodes([]);
+    setCurrentStepIndex(0);
 
-    setRoutingPath(pathCoords);
-    setSelectedRestaurant(target);
-    setMapCenter([target.lat, target.lng]);
-  };
-
-  const handleMapClick = (lat: number, lng: number) => {
-    if (!kdTree) {
-      setNearestSpots([]);
+    const steps = result.steps;
+    if (steps.length === 0) {
+      setIsAnimating(false);
+      setCurrentStepIndex(0);
       return;
     }
+
+    const coordMap = new Map<string, [number, number]>();
+    for (const step of steps) {
+      const node = cityGraph.getNode(step.settledNodeId);
+      if (node) coordMap.set(step.settledNodeId, [node.lat, node.lng]);
+    }
+
+    let stepIndex = 0;
+    const stepIntervalMs = 28;
+
+    const tick = (timestamp: number) => {
+      if (!lastFrameRef.current) lastFrameRef.current = timestamp;
+      const elapsed = timestamp - lastFrameRef.current;
+
+      if (elapsed >= stepIntervalMs) {
+        const step = steps[stepIndex];
+        if (step) {
+          const coord = coordMap.get(step.settledNodeId);
+          if (coord) setExploredNodes((prev) => [...prev, coord]);
+        }
+
+        stepIndex += 1;
+        setCurrentStepIndex(stepIndex);
+        lastFrameRef.current = timestamp;
+      }
+
+      if (stepIndex >= steps.length) {
+        stopAnimation();
+        setIsAnimating(false);
+        setCurrentStepIndex(steps.length);
+
+        const pathCoords = result.path
+          .map((id) => cityGraph.getNode(id))
+          .filter((n): n is GraphNode => Boolean(n))
+          .map((n) => [n.lat, n.lng] as [number, number]);
+
+        setRoutingPath(pathCoords);
+        setTimeout(() => setExploredNodes([]), 350);
+        return;
+      }
+
+      animationRef.current = requestAnimationFrame(tick);
+    };
+
+    animationRef.current = requestAnimationFrame(tick);
+  }, [cityGraph, stopAnimation]);
+
+  const handleSelectRestaurant = useCallback((res: Restaurant | null) => {
+    stopAnimation();
+    setSelectedRestaurant(res);
+    setRoutingPath([]);
+    setDijkstraResult(null);
+    setExploredNodes([]);
+    setCurrentStepIndex(0);
+    setIsAnimating(false);
+    if (res) setFlyTarget({ center: [res.lat, res.lng], zoom: 18 });
+  }, [stopAnimation]);
+
+  const handleFindShortestPath = useCallback((target: Restaurant) => {
+    stopAnimation();
+    setRoutingPath([]);
+    setExploredNodes([]);
+    setCurrentStepIndex(0);
+    setIsAnimating(false);
+
+    const result = cityGraph.dijkstra('iu', target.id);
+    setDijkstraResult(result);
+    setSelectedRestaurant(target);
+    setFlyTarget({ center: [target.lat, target.lng], zoom: 17 });
+    runDijkstraAnimation(result);
+  }, [cityGraph, stopAnimation, runDijkstraAnimation]);
+
+  const handleStartAnimation = useCallback(() => {
+    if (!dijkstraResult) return;
+    runDijkstraAnimation(dijkstraResult);
+  }, [dijkstraResult, runDijkstraAnimation]);
+
+  const handleResetRoute = useCallback(() => {
+    stopAnimation();
+    setRoutingPath([]);
+    setExploredNodes([]);
+    setCurrentStepIndex(0);
+    setIsAnimating(false);
+    setDijkstraResult(null);
+  }, [stopAnimation]);
+
+  const handleMapClick = useCallback((lat: number, lng: number) => {
+    if (!kdTree) return;
     const results = kdTree.nearestK({ id: 'query', lat, lng }, 5, 2.0);
-    setNearestSpots(
-      results.map((item) => ({
-        restaurant: item.point as Restaurant,
-        distanceKm: item.distanceKm,
-      }))
-    );
-  };
+    const mapped = results.map((item) => ({
+      restaurant: item.point as Restaurant,
+      distanceKm: item.distanceKm,
+    }));
+    setNearestSpots(mapped);
+    if (mapped.length > 0) setSidebarMode('nearest');
+  }, [kdTree]);
+
+  const handleBackToTopRated = useCallback(() => {
+    setSidebarMode('top-rated');
+    setNearestSpots([]);
+  }, []);
 
   return (
     <div className="h-screen w-full flex flex-col overflow-hidden bg-[#f9f9ff]">
@@ -98,31 +191,30 @@ export default function App() {
         <Sidebar
           loading={loading}
           restaurants={topRestaurants}
+          nearestSpots={nearestSpots}
           selectedRestaurant={selectedRestaurant}
-          onSelectRestaurant={(res) => handleSelectRestaurant(res)}
+          mode={sidebarMode}
+          onSelectRestaurant={handleSelectRestaurant}
+          onNavigate={handleFindShortestPath}
+          onBackToTopRated={handleBackToTopRated}
         />
 
         <MapView
           restaurants={restaurants}
           selectedRestaurant={selectedRestaurant}
           routingPath={routingPath}
-          mapCenter={mapCenter}
+          exploredNodes={exploredNodes}
+          flyTarget={flyTarget}
+          onFlyComplete={() => setFlyTarget(null)}
           onSelectRestaurant={handleSelectRestaurant}
           onFindPath={handleFindShortestPath}
           onMapClick={handleMapClick}
+          dijkstraResult={dijkstraResult}
+          animatingRoute={isAnimating}
+          currentStepIndex={currentStepIndex}
+          onStartAnimation={handleStartAnimation}
+          onResetRoute={handleResetRoute}
         />
-
-        <div className="absolute top-4 left-4 w-[320px] bg-white rounded-2xl border border-[#c1c6d6] shadow-[0_20px_50px_rgba(0,0,0,0.15)] overflow-hidden z-50 hidden lg:block">
-          <div className="px-4 py-3 border-b border-[#c1c6d6] bg-[#f0f3ff]/30">
-            <h3 className="text-xs font-bold text-[#111c2d] uppercase tracking-wider">Nearest Spots</h3>
-          </div>
-          <NearestPanel
-            results={nearestSpots}
-            onNavigate={handleFindShortestPath}
-            onSelect={handleSelectRestaurant}
-            selectedId={selectedRestaurant?.id ?? null}
-          />
-        </div>
       </div>
     </div>
   );

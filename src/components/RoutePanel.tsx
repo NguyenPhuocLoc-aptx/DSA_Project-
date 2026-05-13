@@ -23,6 +23,13 @@ export default function RoutePanel({
   onStart,
   onReset,
 }: Props) {
+  const safeStepIndex = Math.min(currentStepIndex, totalSteps);
+  const distanceMeters = result?.totalDistanceKm === Infinity
+    ? null
+    : result
+      ? Math.round(result.totalDistanceKm * 1000)
+      : null;
+
   return (
     <div className="p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -43,19 +50,17 @@ export default function RoutePanel({
           {(animating || result) && (
             <div className="space-y-1">
               <div className="flex justify-between text-[10px] text-[#727785]">
-                <span>Bước {currentStepIndex} / {totalSteps}</span>
-                {result && !animating && (
-                  <span className="text-green-600 font-bold">
-                    {result.totalDistanceKm === Infinity
-                      ? 'Không có đường'
-                      : `${(result.totalDistanceKm * 1000).toFixed(0)} m`}
+                <span>{animating ? 'Đang khám phá' : 'Hoàn tất'} · {safeStepIndex} / {totalSteps}</span>
+                {!animating && result && (
+                  <span className={`font-bold ${distanceMeters === null ? 'text-red-600' : 'text-green-600'}`}>
+                    {distanceMeters === null ? 'Không có đường' : `${distanceMeters} m`}
                   </span>
                 )}
               </div>
               <div className="h-1.5 bg-[#dee8ff] rounded-full overflow-hidden">
                 <motion.div
                   className="h-full bg-[#005bbf] rounded-full"
-                  animate={{ width: totalSteps > 0 ? `${(currentStepIndex / totalSteps) * 100}%` : '0%' }}
+                  animate={{ width: totalSteps > 0 ? `${(safeStepIndex / totalSteps) * 100}%` : '0%' }}
                   transition={{ duration: 0.2 }}
                 />
               </div>
@@ -67,11 +72,10 @@ export default function RoutePanel({
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className={`flex items-center gap-2 p-2 rounded-xl text-xs font-medium ${
-                  result.path.length > 0
+                className={`flex items-center gap-2 p-2 rounded-xl text-xs font-medium ${result.path.length > 0
                     ? 'bg-green-50 text-green-700'
                     : 'bg-red-50 text-red-600'
-                }`}
+                  }`}
               >
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
                 {result.path.length > 0
@@ -90,7 +94,7 @@ export default function RoutePanel({
               {animating ? (
                 <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Đang chạy…</>
               ) : (
-                <><Navigation2 className="w-3.5 h-3.5" /> Bắt đầu</>
+                <><Navigation2 className="w-3.5 h-3.5" /> Chạy lại</>
               )}
             </button>
             <button
