@@ -1,7 +1,6 @@
 // src/dsa/Graph.ts
-// Adjacency-list weighted undirected graph + Dijkstra with step-by-step traversal support.
-
 import { BinaryHeap } from './Heap';
+import { OSMNode, OSMEdge } from '../lib/fetchOSMRoadNetwork';
 
 export interface GraphNode {
   id: string;
@@ -11,24 +10,18 @@ export interface GraphNode {
 
 export interface GraphEdge {
   to: string;
-  weight: number; // distance in km
+  weight: number;
 }
 
 export interface DijkstraStep {
-  /** Node being settled (finalized) in this step. */
   settledNodeId: string;
-  /** Current shortest distances snapshot at this step. */
   distances: Record<string, number>;
-  /** Previous-node map at this step (for path reconstruction). */
   previous: Record<string, string | null>;
 }
 
 export interface DijkstraResult {
-  /** Ordered list of node IDs forming the shortest path (empty if unreachable). */
   path: string[];
-  /** Total distance in km. */
   totalDistanceKm: number;
-  /** Step-by-step log for animation/visualization. */
   steps: DijkstraStep[];
 }
 
@@ -43,7 +36,7 @@ export class Graph {
 
   addEdge(fromId: string, toId: string, weight: number): void {
     this.adj.get(fromId)?.push({ to: toId, weight });
-    this.adj.get(toId)?.push({ to: fromId, weight }); // undirected
+    this.adj.get(toId)?.push({ to: fromId, weight });
   }
 
   getNode(id: string): GraphNode | undefined {
@@ -58,10 +51,6 @@ export class Graph {
     return this.adj.get(id) ?? [];
   }
 
-  /**
-   * Dijkstra's algorithm with full step logging for animation.
-   * Uses a min-heap priority queue: O((V + E) log V)
-   */
   dijkstra(startId: string, endId: string): DijkstraResult {
     const distances: Record<string, number> = {};
     const previous: Record<string, string | null> = {};
@@ -74,7 +63,6 @@ export class Graph {
     }
     distances[startId] = 0;
 
-    // Min-heap: [distance, nodeId]
     const pq = new BinaryHeap<[number, string]>((a, b) => a[0] - b[0]);
     pq.push([0, startId]);
 
@@ -83,7 +71,6 @@ export class Graph {
       if (settled.has(u)) continue;
       settled.add(u);
 
-      // Record this settlement as a step for the visualizer.
       steps.push({
         settledNodeId: u,
         distances: { ...distances },
@@ -103,7 +90,6 @@ export class Graph {
       }
     }
 
-    // Reconstruct path.
     const path: string[] = [];
     let curr: string | null = endId;
     while (curr !== null) {
@@ -119,10 +105,15 @@ export class Graph {
     };
   }
 
-  /**
-   * Build a graph from a list of OSM-style nodes.
-   * Connects each node to its N spatially nearest neighbours within maxEdgeKm.
-   */
+  // ── Factory: from explicit OSM node/edge lists ──────────────────────────
+  static buildFromOSM(nodes: OSMNode[], edges: OSMEdge[]): Graph {
+    const g = new Graph();
+    for (const n of nodes) g.addNode(n);
+    for (const e of edges) g.addEdge(e.from, e.to, e.distanceKm);
+    return g;
+  }
+
+  // ── Factory: spatial proximity graph (legacy / fallback) ─────────────────
   static buildFromNodes(nodes: GraphNode[], maxEdgeKm = 0.15, maxNeighbours = 6): Graph {
     const g = new Graph();
     for (const n of nodes) g.addNode(n);
@@ -143,12 +134,17 @@ export class Graph {
   }
 }
 
-function haversineKmSimple(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+function haversineKmSimple(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number }
+): number {
   const R = 6371;
   const dLat = ((b.lat - a.lat) * Math.PI) / 180;
   const dLng = ((b.lng - a.lng) * Math.PI) / 180;
   const s =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+    Math.cos((a.lat * Math.PI) / 180) *
+    Math.cos((b.lat * Math.PI) / 180) *
+    Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
 }

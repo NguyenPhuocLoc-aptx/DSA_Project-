@@ -7,14 +7,21 @@ import SearchBar from './components/SearchBar';
 import { type NearestResult } from './components/NearestPanel';
 import { topKByRating } from './dsa/Heap';
 import { Graph, type GraphNode, type DijkstraResult } from './dsa/Graph';
-import { UI_LOCATION, useRestaurants, type Restaurant } from './hooks/useRestaurants';
+import {
+  UI_LOCATION,
+  UI_LOCATION_OBJ,
+  useRestaurants,
+  type Restaurant,
+} from './hooks/useRestaurants';
+import { snapToNearestNode } from './lib/snapToGraph';
 
 export type SidebarMode = 'top-rated' | 'nearest';
 
 const ANIMATION_DURATION_MS = 2200;
 
 export default function App() {
-  const { restaurants, loading, trie, kdTree } = useRestaurants();
+  const { restaurants, loading, trie, kdTree, osmNetwork, osmKDTree } = useRestaurants();
+
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
   const [routingPath, setRoutingPath] = useState<[number, number][]>([]);
   const [flyTarget, setFlyTarget] = useState<{ center: [number, number]; zoom: number } | null>(null);
@@ -32,10 +39,11 @@ export default function App() {
 
   const topRestaurants = useMemo(() => topKByRating(restaurants, 15), [restaurants]);
 
+  // ✅ osmNetwork is now in scope via destructure above
   const cityGraph = useMemo(() => {
-    const iuNode: GraphNode = { id: 'iu', lat: UI_LOCATION[0], lng: UI_LOCATION[1] };
-    return Graph.buildFromNodes([iuNode, ...restaurants]);
-  }, [restaurants]);
+    if (!osmNetwork) return null;
+    return Graph.buildFromOSM(osmNetwork.nodes, osmNetwork.edges);
+  }, [osmNetwork]);
 
   const stopAnimation = useCallback(() => {
     if (animationRef.current !== null) {
@@ -47,97 +55,117 @@ export default function App() {
 
   useEffect(() => () => stopAnimation(), [stopAnimation]);
 
-  const runDijkstraAnimation = useCallback((result: DijkstraResult) => {
-    stopAnimation();
-    setIsAnimating(true);
-    setRoutingPath([]);
-    setExploredEdges([]);
-    exploredBufferRef.current = [];
-    setCurrentStepIndex(0);
+  const runDijkstraAnimation = useCallback(
+    (result: DijkstraResult) => {
+      // ✅ null-guard cityGraph
+      if (!cityGraph) return;
 
-    const steps = result.steps;
-    if (steps.length === 0) {
-      setIsAnimating(false);
-      return;
-    }
+      stopAnimation();
+      setIsAnimating(true);
+      setRoutingPath([]);
+      setExploredEdges([]);
+      exploredBufferRef.current = [];
+      setCurrentStepIndex(0);
 
-    const msPerStep = Math.min(60, Math.max(8, ANIMATION_DURATION_MS / steps.length));
-    let stepIndex = 0;
-
-    const tick = (timestamp: number) => {
-      if (!lastFrameRef.current) lastFrameRef.current = timestamp;
-      const elapsed = timestamp - lastFrameRef.current;
-      const stepsThisFrame = Math.max(1, Math.floor(elapsed / msPerStep));
-
-      for (let i = 0; i < stepsThisFrame && stepIndex < steps.length; i++) {
-        const step = steps[stepIndex];
-        const currNode = cityGraph.getNode(step.settledNodeId);
-        const prevId = step.previous[step.settledNodeId];
-        const prevNode = prevId ? cityGraph.getNode(prevId) : null;
-        if (currNode && prevNode) {
-          const edge: [[number, number], [number, number]] = [
-            [prevNode.lat, prevNode.lng],
-            [currNode.lat, currNode.lng],
-          ];
-          exploredBufferRef.current = [...exploredBufferRef.current, edge];
-        }
-        stepIndex++;
-      }
-
-      setExploredEdges([...exploredBufferRef.current]);
-      setCurrentStepIndex(stepIndex);
-      lastFrameRef.current = timestamp;
-
-      if (stepIndex >= steps.length) {
-        stopAnimation();
+      const steps = result.steps;
+      if (steps.length === 0) {
         setIsAnimating(false);
-        setCurrentStepIndex(steps.length);
-
-        const pathCoords = result.path
-          .map((id) => cityGraph.getNode(id))
-          .filter((n): n is GraphNode => Boolean(n))
-          .map((n) => [n.lat, n.lng] as [number, number]);
-
-        setRoutingPath(pathCoords);
-        setTimeout(() => {
-          setExploredEdges([]);
-          exploredBufferRef.current = [];
-        }, 500);
         return;
       }
 
+      const msPerStep = Math.min(60, Math.max(8, ANIMATION_DURATION_MS / steps.length));
+      let stepIndex = 0;
+
+      const tick = (timestamp: number) => {
+        if (!lastFrameRef.current) lastFrameRef.current = timestamp;
+        const elapsed = timestamp - lastFrameRef.current;
+        const stepsThisFrame = Math.max(1, Math.floor(elapsed / msPerStep));
+
+        for (let i = 0; i < stepsThisFrame && stepIndex < steps.length; i++) {
+          const step = steps[stepIndex];
+          const currNode = cityGraph.getNode(step.settledNodeId);
+          const prevId = step.previous[step.settledNodeId];
+          const prevNode = prevId ? cityGraph.getNode(prevId) : null;
+          if (currNode && prevNode) {
+            const edge: [[number, number], [number, number]] = [
+              [prevNode.lat, prevNode.lng],
+              [currNode.lat, currNode.lng],
+            ];
+            exploredBufferRef.current = [...exploredBufferRef.current, edge];
+          }
+          stepIndex++;
+        }
+
+        setExploredEdges([...exploredBufferRef.current]);
+        setCurrentStepIndex(stepIndex);
+        lastFrameRef.current = timestamp;
+
+        if (stepIndex >= steps.length) {
+          stopAnimation();
+          setIsAnimating(false);
+          setCurrentStepIndex(steps.length);
+
+          // ✅ null-guard cityGraph again inside async callback
+          const pathCoords = result.path
+            .map((id) => cityGraph.getNode(id))
+            .filter((n): n is GraphNode => Boolean(n))
+            .map((n) => [n.lat, n.lng] as [number, number]);
+
+          setRoutingPath(pathCoords);
+          setTimeout(() => {
+            setExploredEdges([]);
+            exploredBufferRef.current = [];
+          }, 500);
+          return;
+        }
+
+        animationRef.current = requestAnimationFrame(tick);
+      };
+
       animationRef.current = requestAnimationFrame(tick);
-    };
+    },
+    [cityGraph, stopAnimation]
+  );
 
-    animationRef.current = requestAnimationFrame(tick);
-  }, [cityGraph, stopAnimation]);
+  const handleSelectRestaurant = useCallback(
+    (res: Restaurant | null) => {
+      stopAnimation();
+      setSelectedRestaurant(res);
+      setRoutingPath([]);
+      setDijkstraResult(null);
+      setExploredEdges([]);
+      exploredBufferRef.current = [];
+      setCurrentStepIndex(0);
+      setIsAnimating(false);
+      if (res) setFlyTarget({ center: [res.lat, res.lng], zoom: 18 });
+    },
+    [stopAnimation]
+  );
 
-  const handleSelectRestaurant = useCallback((res: Restaurant | null) => {
-    stopAnimation();
-    setSelectedRestaurant(res);
-    setRoutingPath([]);
-    setDijkstraResult(null);
-    setExploredEdges([]);
-    exploredBufferRef.current = [];
-    setCurrentStepIndex(0);
-    setIsAnimating(false);
-    if (res) setFlyTarget({ center: [res.lat, res.lng], zoom: 18 });
-  }, [stopAnimation]);
+  const handleFindShortestPath = useCallback(
+    (target: Restaurant) => {
+      // ✅ both cityGraph and osmKDTree are now in scope
+      if (!cityGraph || !osmKDTree) return;
 
-  const handleFindShortestPath = useCallback((target: Restaurant) => {
-    stopAnimation();
-    setRoutingPath([]);
-    setExploredEdges([]);
-    exploredBufferRef.current = [];
-    setCurrentStepIndex(0);
-    setIsAnimating(false);
+      stopAnimation();
+      setRoutingPath([]);
+      setExploredEdges([]);
+      exploredBufferRef.current = [];
+      setCurrentStepIndex(0);
+      setIsAnimating(false);
 
-    const result = cityGraph.dijkstra('iu', target.id);
-    setDijkstraResult(result);
-    setSelectedRestaurant(target);
-    setFlyTarget({ center: [target.lat, target.lng], zoom: 17 });
-    runDijkstraAnimation(result);
-  }, [cityGraph, stopAnimation, runDijkstraAnimation]);
+      const startId = snapToNearestNode(UI_LOCATION_OBJ, osmKDTree);
+      const endId = snapToNearestNode(target, osmKDTree);
+      if (!startId || !endId) return;
+
+      const result = cityGraph.dijkstra(startId, endId);
+      setDijkstraResult(result);
+      setSelectedRestaurant(target);
+      setFlyTarget({ center: [target.lat, target.lng], zoom: 17 });
+      runDijkstraAnimation(result);
+    },
+    [cityGraph, osmKDTree, stopAnimation, runDijkstraAnimation]
+  );
 
   const handleStartAnimation = useCallback(() => {
     if (!dijkstraResult) return;
@@ -154,16 +182,19 @@ export default function App() {
     setDijkstraResult(null);
   }, [stopAnimation]);
 
-  const handleMapClick = useCallback((lat: number, lng: number) => {
-    if (!kdTree) return;
-    const results = kdTree.nearestK({ id: 'query', lat, lng }, 5, 2.0);
-    const mapped = results.map((item) => ({
-      restaurant: item.point as Restaurant,
-      distanceKm: item.distanceKm,
-    }));
-    setNearestSpots(mapped);
-    if (mapped.length > 0) setSidebarMode('nearest');
-  }, [kdTree]);
+  const handleMapClick = useCallback(
+    (lat: number, lng: number) => {
+      if (!kdTree) return;
+      const results = kdTree.nearestK({ id: 'query', lat, lng }, 5, 2.0);
+      const mapped = results.map((item) => ({
+        restaurant: item.point as Restaurant,
+        distanceKm: item.distanceKm,
+      }));
+      setNearestSpots(mapped);
+      if (mapped.length > 0) setSidebarMode('nearest');
+    },
+    [kdTree]
+  );
 
   const handleBackToTopRated = useCallback(() => {
     setSidebarMode('top-rated');
@@ -178,8 +209,12 @@ export default function App() {
             <Utensils className="w-6 h-6 text-[#005bbf]" />
           </div>
           <div>
-            <span className="text-xl font-bold text-[#005bbf] tracking-tight block leading-none">CulinaryGuide</span>
-            <span className="text-[10px] text-[#414754] font-medium tracking-widest uppercase">IU Campus edition</span>
+            <span className="text-xl font-bold text-[#005bbf] tracking-tight block leading-none">
+              CulinaryGuide
+            </span>
+            <span className="text-[10px] text-[#414754] font-medium tracking-widest uppercase">
+              IU Campus edition
+            </span>
           </div>
         </div>
 

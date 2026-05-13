@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { KDTree, KDPoint } from '../dsa/KDTree';
 import { Trie } from '../dsa/Trie';
+import { fetchOSMRoadNetwork, OSMRoadNetwork } from '../lib/fetchOSMRoadNetwork';
 
 export interface Restaurant extends KDPoint {
   id: string;
@@ -14,9 +15,15 @@ export interface Restaurant extends KDPoint {
 }
 
 export const UI_LOCATION: [number, number] = [10.8752, 106.8016];
+export const UI_LOCATION_OBJ = { lat: UI_LOCATION[0], lng: UI_LOCATION[1] };
+
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 
-async function fetchFromOverpass(lat: number, lng: number, radiusM = 2500): Promise<Restaurant[]> {
+async function fetchRestaurantsFromOverpass(
+  lat: number,
+  lng: number,
+  radiusM = 2500
+): Promise<Restaurant[]> {
   const query = `
     [out:json][timeout:60];
     node["amenity"~"restaurant|cafe|fast_food"](around:${radiusM},${lat},${lng});
@@ -32,7 +39,7 @@ async function fetchFromOverpass(lat: number, lng: number, radiusM = 2500): Prom
     lng: el.lon as number,
     name: (el.tags?.name as string) || 'Quán chưa đặt tên',
     type: (el.tags?.amenity as Restaurant['type']) ?? 'restaurant',
-    rating: parseFloat((Math.random() * 1.5 + 3.5).toFixed(1)), // 3.5–5.0
+    rating: parseFloat((Math.random() * 1.5 + 3.5).toFixed(1)),
     address: (el.tags?.['addr:street'] as string) || 'Linh Trung, Thủ Đức',
   }));
 }
@@ -43,28 +50,46 @@ export interface UseRestaurantsReturn {
   error: string | null;
   kdTree: KDTree | null;
   trie: Trie | null;
+  osmNetwork: OSMRoadNetwork | null;
+  osmKDTree: KDTree | null;
+  osmLoading: boolean;
 }
 
 export function useRestaurants(): UseRestaurantsReturn {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [osmNetwork, setOsmNetwork] = useState<OSMRoadNetwork | null>(null);
+  const [osmLoading, setOsmLoading] = useState(true);
 
+  // Fetch restaurants
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchFromOverpass(UI_LOCATION[0], UI_LOCATION[1])
+    fetchRestaurantsFromOverpass(UI_LOCATION[0], UI_LOCATION[1])
       .then((data) => {
-        if (!cancelled) {
-          setRestaurants(data);
-          setLoading(false);
-        }
+        if (!cancelled) { setRestaurants(data); setLoading(false); }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Unknown error');
           setLoading(false);
         }
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Fetch OSM road network
+  useEffect(() => {
+    let cancelled = false;
+    setOsmLoading(true);
+    fetchOSMRoadNetwork(UI_LOCATION[0], UI_LOCATION[1])
+      .then((network) => {
+        if (!cancelled) { setOsmNetwork(network); setOsmLoading(false); }
+      })
+      .catch((err) => {
+        console.error('OSM road network fetch failed:', err);
+        if (!cancelled) setOsmLoading(false);
       });
     return () => { cancelled = true; };
   }, []);
@@ -81,5 +106,11 @@ export function useRestaurants(): UseRestaurantsReturn {
     return t;
   }, [restaurants]);
 
-  return { restaurants, loading, error, kdTree, trie };
+  // KD-Tree built over OSM road nodes — used for snapping
+  const osmKDTree = useMemo(
+    () => (osmNetwork ? new KDTree(osmNetwork.nodes) : null),
+    [osmNetwork]
+  );
+
+  return { restaurants, loading, error, kdTree, trie, osmNetwork, osmKDTree, osmLoading };
 }
