@@ -11,6 +11,8 @@ import { UI_LOCATION, useRestaurants, type Restaurant } from './hooks/useRestaur
 
 export type SidebarMode = 'top-rated' | 'nearest';
 
+const ANIMATION_DURATION_MS = 2200;
+
 export default function App() {
   const { restaurants, loading, trie, kdTree } = useRestaurants();
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
@@ -19,11 +21,12 @@ export default function App() {
   const [nearestSpots, setNearestSpots] = useState<NearestResult[]>([]);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('top-rated');
 
-  // Dijkstra animation state
   const [dijkstraResult, setDijkstraResult] = useState<DijkstraResult | null>(null);
   const [isAnimating, setIsAnimating] = useState(false);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [exploredNodes, setExploredNodes] = useState<[number, number][]>([]);
+  const [exploredEdges, setExploredEdges] = useState<[[number, number], [number, number]][]>([]);
+  const exploredBufferRef = useRef<[[number, number], [number, number]][]>([]);
+
   const animationRef = useRef<number | null>(null);
   const lastFrameRef = useRef(0);
 
@@ -48,40 +51,42 @@ export default function App() {
     stopAnimation();
     setIsAnimating(true);
     setRoutingPath([]);
-    setExploredNodes([]);
+    setExploredEdges([]);
+    exploredBufferRef.current = [];
     setCurrentStepIndex(0);
 
     const steps = result.steps;
     if (steps.length === 0) {
       setIsAnimating(false);
-      setCurrentStepIndex(0);
       return;
     }
 
-    const coordMap = new Map<string, [number, number]>();
-    for (const step of steps) {
-      const node = cityGraph.getNode(step.settledNodeId);
-      if (node) coordMap.set(step.settledNodeId, [node.lat, node.lng]);
-    }
-
+    const msPerStep = Math.min(60, Math.max(8, ANIMATION_DURATION_MS / steps.length));
     let stepIndex = 0;
-    const stepIntervalMs = 28;
 
     const tick = (timestamp: number) => {
       if (!lastFrameRef.current) lastFrameRef.current = timestamp;
       const elapsed = timestamp - lastFrameRef.current;
+      const stepsThisFrame = Math.max(1, Math.floor(elapsed / msPerStep));
 
-      if (elapsed >= stepIntervalMs) {
+      for (let i = 0; i < stepsThisFrame && stepIndex < steps.length; i++) {
         const step = steps[stepIndex];
-        if (step) {
-          const coord = coordMap.get(step.settledNodeId);
-          if (coord) setExploredNodes((prev) => [...prev, coord]);
+        const currNode = cityGraph.getNode(step.settledNodeId);
+        const prevId = step.previous[step.settledNodeId];
+        const prevNode = prevId ? cityGraph.getNode(prevId) : null;
+        if (currNode && prevNode) {
+          const edge: [[number, number], [number, number]] = [
+            [prevNode.lat, prevNode.lng],
+            [currNode.lat, currNode.lng],
+          ];
+          exploredBufferRef.current = [...exploredBufferRef.current, edge];
         }
-
-        stepIndex += 1;
-        setCurrentStepIndex(stepIndex);
-        lastFrameRef.current = timestamp;
+        stepIndex++;
       }
+
+      setExploredEdges([...exploredBufferRef.current]);
+      setCurrentStepIndex(stepIndex);
+      lastFrameRef.current = timestamp;
 
       if (stepIndex >= steps.length) {
         stopAnimation();
@@ -94,7 +99,10 @@ export default function App() {
           .map((n) => [n.lat, n.lng] as [number, number]);
 
         setRoutingPath(pathCoords);
-        setTimeout(() => setExploredNodes([]), 350);
+        setTimeout(() => {
+          setExploredEdges([]);
+          exploredBufferRef.current = [];
+        }, 500);
         return;
       }
 
@@ -109,7 +117,8 @@ export default function App() {
     setSelectedRestaurant(res);
     setRoutingPath([]);
     setDijkstraResult(null);
-    setExploredNodes([]);
+    setExploredEdges([]);
+    exploredBufferRef.current = [];
     setCurrentStepIndex(0);
     setIsAnimating(false);
     if (res) setFlyTarget({ center: [res.lat, res.lng], zoom: 18 });
@@ -118,7 +127,8 @@ export default function App() {
   const handleFindShortestPath = useCallback((target: Restaurant) => {
     stopAnimation();
     setRoutingPath([]);
-    setExploredNodes([]);
+    setExploredEdges([]);
+    exploredBufferRef.current = [];
     setCurrentStepIndex(0);
     setIsAnimating(false);
 
@@ -137,7 +147,8 @@ export default function App() {
   const handleResetRoute = useCallback(() => {
     stopAnimation();
     setRoutingPath([]);
-    setExploredNodes([]);
+    setExploredEdges([]);
+    exploredBufferRef.current = [];
     setCurrentStepIndex(0);
     setIsAnimating(false);
     setDijkstraResult(null);
@@ -203,7 +214,7 @@ export default function App() {
           restaurants={restaurants}
           selectedRestaurant={selectedRestaurant}
           routingPath={routingPath}
-          exploredNodes={exploredNodes}
+          exploredEdges={exploredEdges}
           flyTarget={flyTarget}
           onFlyComplete={() => setFlyTarget(null)}
           onSelectRestaurant={handleSelectRestaurant}

@@ -5,7 +5,6 @@ import {
     TileLayer,
     Marker,
     Polyline,
-    Circle,
     Popup,
     useMap,
     useMapEvents,
@@ -84,7 +83,7 @@ interface MapViewProps {
     restaurants: Restaurant[];
     selectedRestaurant: Restaurant | null;
     routingPath: [number, number][];
-    exploredNodes: [number, number][];
+    exploredEdges: [[number, number], [number, number]][];
     flyTarget: { center: [number, number]; zoom: number } | null;
     onFlyComplete: () => void;
     onSelectRestaurant: (res: Restaurant | null) => void;
@@ -101,7 +100,7 @@ export default function MapView({
     restaurants,
     selectedRestaurant,
     routingPath,
-    exploredNodes,
+    exploredEdges,
     flyTarget,
     onFlyComplete,
     onSelectRestaurant,
@@ -194,29 +193,48 @@ export default function MapView({
                     />
                 )}
 
-                {/* Dijkstra explored nodes — faint grey dots */}
-                {exploredNodes.map((pos, i) => (
-                    <Circle
-                        key={`exp-${i}`}
-                        center={pos}
-                        radius={12}
+                {/* ── Dijkstra exploration edges ─────────────────────────────
+                 * Each segment connects a settled node to the node it was
+                 * reached from, visualising the paths Dijkstra is actively
+                 * relaxing — like a spreading road-scanner.
+                 */}
+                {exploredEdges.map((positions, i) => (
+                    <Polyline
+                        key={`edge-${i}`}
+                        positions={positions}
                         pathOptions={{
-                            stroke: false,
-                            fillColor: '#cbd5f5',
-                            fillOpacity: 0.45,
+                            color: '#6366f1',
+                            weight: 4,
+                            opacity: 0.4,
                         }}
                     />
                 ))}
 
-                {/* Final shortest path polyline */}
+                {/* ── Final shortest path — Google Maps double-layer style ──
+                 * A wider dark-blue background stroke gives the road a raised,
+                 * 3-D appearance; the brighter foreground stroke sits on top.
+                 */}
                 {animatedPath.length > 1 && (
-                    <Polyline
-                        positions={animatedPath}
-                        color="#005bbf"
-                        weight={5}
-                        opacity={0.9}
-                        dashArray="8, 12"
-                    />
+                    <>
+                        {/* Background (shadow) stroke */}
+                        <Polyline
+                            positions={animatedPath}
+                            pathOptions={{
+                                color: '#1d4ed8',
+                                weight: 8,
+                                opacity: 0.9,
+                            }}
+                        />
+                        {/* Foreground (highlight) stroke */}
+                        <Polyline
+                            positions={animatedPath}
+                            pathOptions={{
+                                color: '#3b82f6',
+                                weight: 5,
+                                opacity: 1,
+                            }}
+                        />
+                    </>
                 )}
 
                 {/* Restaurant markers */}
